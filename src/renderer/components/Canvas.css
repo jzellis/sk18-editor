@@ -1,0 +1,127 @@
+.canvas-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  padding-bottom: 32px;
+}
+.canvas-controls {
+  width: 100%;
+  max-width: 900px;
+}
+.canvas-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.canvas-dim {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.canvas-stage {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  flex-shrink: 0;
+}
+
+.canvas-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.canvas-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #111;
+  overflow: hidden;
+}
+.canvas-bg-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  font-size: 13px;
+  background: repeating-linear-gradient(
+    45deg,
+    #111 0px,
+    #111 10px,
+    #181828 10px,
+    #181828 20px
+  );
+}
+
+.key-cell {
+  position: absolute;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, background 0.15s;
+  background: rgba(0,0,0,0.2);
+  overflow: hidden;
+}
+.key-cell:hover {
+  border-color: rgba(0,229,255,0.5);
+  background: rgba(0,229,255,0.05);
+}
+.key-cell.has-action {
+  border-color: rgba(124,77,255,0.6);
+  background: rgba(124,77,255,0.1);
+}
+.key-cell.selected {
+  border-color: var(--accent2) !important;
+  background: rgba(0,229,255,0.12) !important;
+  box-shadow: 0 0 0 2px var(--accent2);
+}
+.key-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.8);
+  text-align: center;
+  padding: 4px;
+  pointer-events: none;
+}
+.key-pos {
+  font-size: 9px;
+  color: rgba(255,255,255,0.3);
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  pointer-events: none;
+}
+
+.overlay-item {
+  position: absolute;
+  border: 1px dashed rgba(255,200,0,0.4);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  padding: 3px 5px;
+  background: rgba(255,200,0,0.05);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.overlay-item:hover { border-color: rgba(255,200,0,0.8); }
+.overlay-item.selected {
+  border-color: var(--accent2);
+  background: rgba(0,229,255,0.08);
+  box-shadow: 0 0 0 2px var(--accent2);
+}
+.overlay-label {
+  font-size: 9px;
+  color: rgba(255,200,0,0.7);
+  background: rgba(0,0,0,0.5);
+  padding: 1px 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}

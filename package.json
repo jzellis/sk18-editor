@@ -1,0 +1,43 @@
+{
+  "name": "sk18-editor",
+  "version": "0.1.0",
+  "description": "SK18 Stream Deck theme editor",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && electron-builder",
+    "electron:dev": "vite",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^8.0.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "vite-plugin-electron": "^0.15.0",
+    "vite-plugin-electron-renderer": "^0.14.0"
+  },
+  "dependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "serialport": "^13.0.0",
+    "uuid": "^14.0.0"
+  },
+  "build": {
+    "appId": "com.sk18.editor",
+    "productName": "SK18 Editor",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

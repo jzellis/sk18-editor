@@ -121,6 +121,35 @@ Estimated CMD values (if sequential from 84):
 - CMD_VALUE_REQUEST_UPLOAD_KEY = 98
 - CMD_VALUE_SEND_JSON = 99
 
+## Device Config Files (Volumn/ FAT partition)
+
+`Volumn/config.json`:
+```json
+{"defaultTheme":"/data/theme/SK18/My Theme.Theme","deviceBl":100,"deviceVolume":0,"enableXIAOZHIAI":false,"isCanvasFlip":true}
+```
+- `defaultTheme`: full device path of the active theme (must be updated when switching themes)
+- `deviceBl`: backlight 0-100
+- `deviceVolume`: volume 0-100
+- `enableXIAOZHIAI`: 小智AI voice assistant toggle
+- `isCanvasFlip`: mirrors canvas_flip in theme JSON
+
+`03259a09-.../upper/file_info.json` — theme registry (what getFilesBySuffix returns):
+```json
+[{"crc":"535202640","filePath":"/data/theme/SK18/defaultTheme-微雪.Theme"},
+ {"crc":"1847775342","filePath":"/data/theme/SK18/defaultTheme.Theme"},
+ {"crc":"1108029700","filePath":"/data/theme/SK18/Quantum字母/Quantum字母.Theme"},
+ {"crc":"393424449","filePath":"/data/theme/SK18/My Theme.Theme"}]
+```
+
+## Full theme push sequence (all steps required)
+1. Upload file in 64KB chunks via `saveToFile` serial method
+2. Send `setFileCRC` with CRC32 of full file
+3. Update `file_info.json` with new entry (or update existing CRC)
+4. Update `defaultTheme` in `config.json` to point to new file
+5. Send reload command (CMD_VALUE_SET_DEVICE_RELOAD or equivalent JSON method)
+
+Steps 3-5 are not yet implemented in the editor's push flow.
+
 ## JSON Protocol Methods (CMD_VALUE_JSON payloads)
 
 PC→Device request format: `{"method": "...", "parameters": {...}}`

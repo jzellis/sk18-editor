@@ -8,11 +8,13 @@ interface Props {
   item: Item | null
   page: Page | null
   allPages: Page[]
+  assets: Record<string, string>
   onUpdate: (item: Item) => void
   onDelete: (id: string) => void
+  onAddAsset: (devicePath: string, dataB64: string) => void
 }
 
-export default function ItemPanel({ item, page, allPages, onUpdate, onDelete }: Props) {
+export default function ItemPanel({ item, page, allPages, assets, onUpdate, onDelete, onAddAsset }: Props) {
   if (!item) {
     return (
       <div className="item-panel empty">
@@ -36,7 +38,7 @@ export default function ItemPanel({ item, page, allPages, onUpdate, onDelete }: 
       </div>
       <div className="item-panel-body">
         {item.type === 115 ? (
-          <ButtonEditor key={item.id} item={item} allPages={allPages} onUpdate={onUpdate} />
+          <ButtonEditor key={item.id} item={item} allPages={allPages} assets={assets} onUpdate={onUpdate} onAddAsset={onAddAsset} />
         ) : (
           <OverlayEditor key={item.id} item={item} onUpdate={onUpdate} />
         )}

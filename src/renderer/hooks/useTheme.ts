@@ -6,7 +6,7 @@ import { CANVAS_W, CANVAS_H, GRID_COLS, GRID_ROWS } from '../../shared/types'
 export interface ThemeState {
   theme: ThemeFile | null
   filePath: string | null
-  imageBlobB64: string
+  assets: Record<string, string>  // devicePath → base64 raw data
   dirty: boolean
   currentPageId: string | null
 }
@@ -23,7 +23,7 @@ function blankPage(name = 'New Page'): Page {
 function blankTheme(): ThemeFile {
   const page = blankPage('Page 1')
   return {
-    main: { currentPage: page.id, version: 'V3.0' },
+    main: { currentPage: page.pageName, version: 'V3.0' },
     pages: [page]
   }
 }
@@ -32,7 +32,7 @@ export function useTheme() {
   const [state, setState] = useState<ThemeState>({
     theme: null,
     filePath: null,
-    imageBlobB64: '',
+    assets: {},
     dirty: false,
     currentPageId: null
   })
@@ -42,7 +42,7 @@ export function useTheme() {
     setState({
       theme,
       filePath: null,
-      imageBlobB64: '',
+      assets: {},
       dirty: false,
       currentPageId: theme.pages[0].id
     })
@@ -54,7 +54,7 @@ export function useTheme() {
     setState({
       theme: result.theme,
       filePath: result.filePath,
-      imageBlobB64: result.imageBlobB64,
+      assets: result.assets || {},
       dirty: false,
       currentPageId: result.theme.main.currentPage || result.theme.pages[0]?.id || null
     })
@@ -63,10 +63,10 @@ export function useTheme() {
   const saveTheme = useCallback(async (st: ThemeState) => {
     if (!st.theme) return
     if (st.filePath) {
-      await (window as any).sk18.saveTheme(st.filePath, st.theme, st.imageBlobB64)
+      await (window as any).sk18.saveTheme(st.filePath, st.theme, st.assets)
       setState(prev => ({ ...prev, dirty: false }))
     } else {
-      const result = await (window as any).sk18.saveThemeAs(st.theme, st.imageBlobB64)
+      const result = await (window as any).sk18.saveThemeAs(st.theme, st.assets)
       if (result?.filePath) {
         setState(prev => ({ ...prev, filePath: result.filePath, dirty: false }))
       }
@@ -75,7 +75,7 @@ export function useTheme() {
 
   const saveThemeAs = useCallback(async (st: ThemeState) => {
     if (!st.theme) return
-    const result = await (window as any).sk18.saveThemeAs(st.theme, st.imageBlobB64)
+    const result = await (window as any).sk18.saveThemeAs(st.theme, st.assets)
     if (result?.filePath) {
       setState(prev => ({ ...prev, filePath: result.filePath, dirty: false }))
     }
@@ -155,6 +155,10 @@ export function useTheme() {
     })
   }, [])
 
+  const addAsset = useCallback((devicePath: string, dataB64: string) => {
+    setState(prev => ({ ...prev, assets: { ...prev.assets, [devicePath]: dataB64 }, dirty: true }))
+  }, [])
+
   const deleteItem = useCallback((pageId: string, itemId: string) => {
     setState(prev => {
       if (!prev.theme) return prev
@@ -181,6 +185,7 @@ export function useTheme() {
     setCurrentPage,
     updatePage,
     upsertItem,
-    deleteItem
+    deleteItem,
+    addAsset
   }
 }

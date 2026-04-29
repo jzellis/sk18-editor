@@ -7,7 +7,9 @@ import './ButtonEditor.css'
 interface Props {
   item: Item
   allPages: Page[]
+  assets: Record<string, string>
   onUpdate: (item: Item) => void
+  onAddAsset: (devicePath: string, dataB64: string) => void
 }
 
 type ActionMap = Record<string, unknown>
@@ -31,7 +33,7 @@ const ACTION_TYPES = [
   { value: 'delay', label: 'Delay' },
 ]
 
-export default function ButtonEditor({ item, allPages, onUpdate }: Props) {
+export default function ButtonEditor({ item, allPages, assets, onUpdate, onAddAsset }: Props) {
   // Derive action directly from item props — no local state, always in sync
   const action: ActionMap = (item.controlData ? controlDataToAction(item.controlData) : null) || { actionType: 'keyboard' }
   const steps: ActionMap[] = item.controlDataList ? controlDataListToActions(item.controlDataList) : []
@@ -102,8 +104,80 @@ export default function ButtonEditor({ item, allPages, onUpdate }: Props) {
     return parts.join('+')
   }
 
+  const DEFAULT_TITLE_PARAM = {
+    FontFamily: 'Microsoft YaHei', FontSize: 24, FontStyle: '',
+    FontUnderline: false, ShowImage: true, ShowTitle: true,
+    TitleAlignment: 'bottom', TitleColor: '#ffffff'
+  }
+
+  function updateTitle(title: string) {
+    const hasIcon = !!((item.path as string) || '')
+    const param = { ...DEFAULT_TITLE_PARAM, ShowImage: hasIcon, ShowTitle: title.length > 0 }
+    onUpdate({ ...item, title, titleParam: JSON.stringify(param) })
+  }
+
+  // Icon preview
+  const iconPath = (item.path as string) || ''
+  const iconB64 = iconPath ? assets[iconPath] : null
+  const iconMime = iconPath.endsWith('.gif') ? 'image/gif' : iconPath.endsWith('.jpg') || iconPath.endsWith('.jpeg') ? 'image/jpeg' : 'image/png'
+  const iconPreviewUrl = iconB64 ? `data:${iconMime};base64,${iconB64}` : null
+
+  async function pickIcon() {
+    const result = await (window as any).sk18.pickIcon()
+    if (!result) return
+    onAddAsset(result.devicePath, result.dataB64)
+    const hasTitle = ((item.title as string) || '').length > 0
+    const param = { ...DEFAULT_TITLE_PARAM, ShowImage: true, ShowTitle: hasTitle }
+    onUpdate({ ...item, path: result.devicePath, titleParam: JSON.stringify(param) })
+  }
+
+  function clearIcon() {
+    const hasTitle = ((item.title as string) || '').length > 0
+    const param = { ...DEFAULT_TITLE_PARAM, ShowImage: false, ShowTitle: hasTitle }
+    onUpdate({ ...item, path: '', titleParam: JSON.stringify(param) })
+  }
+
   return (
     <div className="button-editor">
+      <div className="field-group">
+        <label>Label</label>
+        <input
+          value={(item.title as string) || ''}
+          onChange={e => updateTitle(e.target.value)}
+          placeholder="Optional label shown on button..."
+        />
+      </div>
+
+      <div className="field-group">
+        <label>Icon</label>
+        <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 6, overflow: 'hidden',
+            background: '#1a1a2e', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0
+          }}>
+            {iconPreviewUrl
+              ? <img src={iconPreviewUrl} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="" />
+              : <span style={{ fontSize: 9, color: 'var(--text2)', textAlign: 'center' }}>
+                  {iconPath ? 'device\nicon' : 'none'}
+                </span>
+            }
+          </div>
+          <div className="col" style={{ gap: 4, flex: 1 }}>
+            <button className="small primary" onClick={pickIcon}>Pick Image...</button>
+            {iconPath && (
+              <button className="small" onClick={clearIcon}>Clear</button>
+            )}
+            {iconPath && (
+              <span style={{ fontSize: 9, color: 'var(--text2)', wordBreak: 'break-all' }}>
+                {iconPath.split('/').pop()}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="field-group">
         <label>Action Type</label>
         <select value={actionType} onChange={e => setActionType(e.target.value)}>
@@ -149,10 +223,11 @@ export default function ButtonEditor({ item, allPages, onUpdate }: Props) {
         <div className="field-group">
           <label>Target Page</label>
           <select
-            value={(action.pageId as string) || ''}
+            value={(action.pageId as string) || (allPages[(action.jumpToPage as number) ?? -1]?.id ?? '')}
             onChange={e => {
-              const pg = allPages.find(p => p.id === e.target.value)
-              save({ ...action, pageId: e.target.value, pageName: pg?.pageName || '' }, steps)
+              const idx = allPages.findIndex(p => p.id === e.target.value)
+              const pg = allPages[idx]
+              save({ ...action, pageId: e.target.value, pageName: pg?.pageName || '', jumpToPage: idx }, steps)
             }}
           >
             <option value="">-- select page --</option>
@@ -498,9 +573,10 @@ function StepFields({ step, allPages, onUpdate }: { step: ActionMap; allPages: P
     return (
       <div className="field-group">
         <label>Target Page</label>
-        <select value={(step.pageId as string) || ''} onChange={e => {
-          const pg = allPages.find(p => p.id === e.target.value)
-          onUpdate({ ...step, pageId: e.target.value, pageName: pg?.pageName || '' })
+        <select value={(step.pageId as string) || (allPages[(step.jumpToPage as number) ?? -1]?.id ?? '')} onChange={e => {
+          const idx = allPages.findIndex(p => p.id === e.target.value)
+          const pg = allPages[idx]
+          onUpdate({ ...step, pageId: e.target.value, pageName: pg?.pageName || '', jumpToPage: idx })
         }}>
           <option value="">-- select --</option>
           {allPages.map(p => <option key={p.id} value={p.id}>{p.pageName}</option>)}

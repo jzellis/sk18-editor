@@ -37,7 +37,41 @@ function crc32Manual(buf: Buffer): number {
 
 const FRAME_MAGIC = Buffer.from([0xA1, 0xA5, 0x5A, 0x5E])
 const CMD_JSON = 101
+const CMD_SEND_SYSTEM_DATA = 85
 const CHUNK_SIZE = 64 * 1024
+
+// Protocol B (FIXEDCMDHEAD) — used by the full ScreenKey app for theme switching
+const FIXEDCMD_PREFIX = Buffer.from('AA551234 FIXEDCMDHEAD ')
+
+function buildFixedCmd(cmd: number, msgType: number, payload: Buffer): Buffer {
+  const size = Buffer.alloc(4); size.writeUInt32LE(payload.length, 0)
+  const crc  = Buffer.alloc(4); crc.writeUInt32LE(crc32(payload), 0)
+  const cmdBuf  = Buffer.alloc(4); cmdBuf.writeUInt32LE(cmd, 0)
+  const typeBuf = Buffer.alloc(4); typeBuf.writeUInt32LE(msgType, 0)
+  return Buffer.concat([FIXEDCMD_PREFIX, cmdBuf, typeBuf, size, crc, payload])
+}
+
+// QMap<QString,QString>: uint32BE count + alternating key/value QStrings
+function qmapStrings(map: Record<string, string>): Buffer {
+  const entries = Object.entries(map)
+  const parts: Buffer[] = []
+  const count = Buffer.alloc(4); count.writeUInt32BE(entries.length, 0)
+  parts.push(count)
+  for (const [k, v] of entries) {
+    parts.push(qstringPayload(k))
+    parts.push(qstringPayload(v))
+  }
+  return Buffer.concat(parts)
+}
+
+// QDataStream big-endian QString encoding: uint32BE byte-count + UTF-16BE chars
+function qstringPayload(s: string): Buffer {
+  const be = Buffer.alloc(s.length * 2)
+  for (let i = 0; i < s.length; i++) be.writeUInt16BE(s.charCodeAt(i), i * 2)
+  const lenBuf = Buffer.alloc(4)
+  lenBuf.writeUInt32BE(be.length, 0)
+  return Buffer.concat([lenBuf, be])
+}
 
 let frameId = 0
 
@@ -71,12 +105,16 @@ export interface ThemeFileEntry {
 }
 
 type PendingResolver = (data: Record<string, unknown>) => void
+type MessageHandler = (msg: Record<string, unknown>) => void
 
 export class SK18Serial {
   private port: SerialPort | null = null
   private rxBuf = Buffer.alloc(0)
   private pending: Map<string, PendingResolver> = new Map()
   private onProgress: ((pct: number, msg: string) => void) | null = null
+  private onMessage: MessageHandler | null = null
+
+  setOnMessage(cb: MessageHandler | null) { this.onMessage = cb }
 
   async connect(portPath: string): Promise<DeviceInfo> {
     if (this.port) {
@@ -86,35 +124,30 @@ export class SK18Serial {
     this.pending.clear()
 
     this.port = new SerialPort({
-      path: portPath,
-      baudRate: 115200,
-      dataBits: 8,
-      stopBits: 1,
-      parity: 'none',
-      autoOpen: false
+      path: portPath, baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none',
+      rtscts: false, autoOpen: false
     })
 
     await new Promise<void>((resolve, reject) => {
       this.port!.open(err => err ? reject(err) : resolve())
     })
 
-    // DTR cycle: Linux CDC ACM sets DTR=1 on open. Dropping and raising DTR
-    // sends a fresh SET_CONTROL_LINE_STATE edge to the device firmware, which
-    // re-triggers its serial listener regardless of how long ago it booted.
-    await new Promise<void>(res => this.port!.set({ dtr: false }, () => res()))
-    await new Promise<void>(res => setTimeout(res, 150))
-    await new Promise<void>(res => this.port!.set({ dtr: true }, () => res()))
-    await new Promise<void>(res => setTimeout(res, 50))
+    // Wait 1s for the device serial listener to be fully ready after USB enumeration.
+    // Connecting immediately on hotplug can cause writes to block if the firmware
+    // hasn't opened its serial endpoint yet.
+    await new Promise<void>(res => setTimeout(res, 1000))
 
     this.rxBuf = Buffer.alloc(0)
     this.port.on('data', (chunk: Buffer) => this.onData(chunk))
     this.port.on('error', (err: Error) => log(`SK18 serial error: ${err.message}`))
 
-    // Device serial loop requires ~1MB of data before it starts processing frames.
     await this.write1MB()
+    // Discard any data received during the 1MB phase (device may send proactive
+    // FIXEDCMDHEAD messages during init that would corrupt frame parsing).
+    this.rxBuf = Buffer.alloc(0)
 
     const getInfoFrame = buildJsonFrame({ method: 'getInfo' })
-    log(`SK18 TX getInfo (${getInfoFrame.length} bytes): ${getInfoFrame.toString('hex')}`)
+    log(`SK18 TX getInfo`)
     await new Promise<void>((resolve, reject) => {
       this.port!.write(getInfoFrame, err => err ? reject(err) : resolve())
     })
@@ -164,41 +197,87 @@ export class SK18Serial {
       })
       this.send(frame)
 
-      const response = await this.waitFor('saveToFile', 15000)
+      const response = await this.waitFor('saveToFile', 60000)
       if (!response.success) {
         throw new Error(`saveToFile failed at seek ${seek}: ${response.errorString || 'unknown error'}`)
       }
 
       seek += chunk.length
-      const pct = Math.round((seek / totalSize) * 95)
+      const pct = Math.round((seek / totalSize) * 80)
       this.onProgress?.(pct, `Uploading... ${pct}%`)
     }
 
-    // Send CRC
+    // Verify CRC — device updates file_info.json automatically on success
+    this.onProgress?.(85, 'Verifying...')
     const fileCrc = crc32(themeData)
     const crcFrame = buildJsonFrame({
       method: 'setFileCRC',
-      parameters: {
-        filePath: devicePath,
-        crc: String(fileCrc)
-      }
+      parameters: { filePath: devicePath, crc: String(fileCrc) }
     })
     this.send(crcFrame)
-    await this.waitFor('setFileCRC', 5000)
+    const crcResp = await this.waitFor('setFileCRC', 10000)
+    if (crcResp.success === false) {
+      throw new Error(`setFileCRC failed: ${crcResp.errorString || 'CRC mismatch'}`)
+    }
+
+    this.onProgress?.(95, 'Switching theme...')
+    await this.switchThemeProtocolB(devicePath)
 
     this.onProgress?.(100, 'Done')
   }
 
-  private async write1MB(): Promise<void> {
-    const chunk = Buffer.alloc(4096, 0x30)
-    const TOTAL = 1024 * 1024
-    let sent = 0
-    while (sent < TOTAL) {
-      const ok = this.port!.write(chunk)
-      sent += chunk.length
-      if (!ok) await new Promise<void>(res => this.port!.once('drain', res))
+  // Protocol B handshake: arms page switching, sets active theme, persists across reboot.
+  // Must be called after a successful saveToFile + setFileCRC upload.
+  async switchThemeProtocolB(devicePath: string): Promise<void> {
+    const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms))
+    const pathBytes = Buffer.from(devicePath, 'utf8')
+
+    log(`SK18 Protocol B switch: "${devicePath}"`)
+    this.send(buildFixedCmd(0, 0, Buffer.alloc(0)))   // type=0: device info request
+    await sleep(300)
+    this.send(buildFixedCmd(0, 15, Buffer.from(JSON.stringify({ connect: true }), 'utf8')))
+    await sleep(500)
+    this.send(buildFixedCmd(0, 2, pathBytes))          // type=2: set active theme (updates config.json)
+    await sleep(2000)
+    this.send(buildFixedCmd(0, 9, qmapStrings({ canvasflip: '1' })))
+    await sleep(500)
+    log(`SK18 Protocol B switch complete`)
+  }
+
+  async reloadTheme(devicePath: string): Promise<void> {
+    return this.switchThemeProtocolB(devicePath)
+  }
+
+  // Send CMD_VALUE_SEND_SYSTEM_DATA_TO_DEVICE = 85
+  // Payload: QDataStream QMap<QString,QString> — uint32BE count, then key/value QString pairs
+  async sendSystemData(data: Record<string, string>): Promise<void> {
+    const entries = Object.entries(data)
+    const parts: Buffer[] = []
+    const countBuf = Buffer.alloc(4)
+    countBuf.writeUInt32BE(entries.length, 0)
+    parts.push(countBuf)
+    for (const [k, v] of entries) {
+      parts.push(qstringPayload(k))
+      parts.push(qstringPayload(v))
     }
-    await new Promise<void>(res => this.port!.drain(res))
+    const payload = Buffer.concat(parts)
+    const frame = buildFrame(CMD_SEND_SYSTEM_DATA, payload)
+    log(`SK18 TX sendSystemData cmd=${CMD_SEND_SYSTEM_DATA} entries=${entries.length}`)
+    this.send(frame)
+  }
+
+  private async write1MB(): Promise<void> {
+    log('SK18 write1MB start')
+    // Fire all chunks into the kernel write buffer without awaiting individual
+    // callbacks. USB CDC ACM transfers at USB speed (<1s for 1MB), not baud rate.
+    // The drain event never fires (no backpressure), so a fixed 2s settle is used.
+    const chunk = Buffer.alloc(4096, 0x30)
+    for (let i = 0; i < 256; i++) {
+      if (!this.port?.isOpen) throw new Error('Port closed during write1MB')
+      this.port.write(chunk)
+    }
+    await new Promise<void>(res => setTimeout(res, 2000))
+    log('SK18 write1MB done')
   }
 
   private send(frame: Buffer) {
@@ -280,9 +359,12 @@ export class SK18Serial {
       const text = payload.toString('utf8')
       log(`SK18 frame payload (${payload.length}b): ${text.slice(0, 200)}`)
       const json = JSON.parse(text)
-      const ackMethod = json.ack_method as string
-      log(`SK18 ack_method: ${ackMethod}, pending: [${[...this.pending.keys()].join(',')}]`)
+
+      const ackMethod = json.ack_method as string | undefined
+      const method = json.method as string | undefined
+
       if (ackMethod) {
+        log(`SK18 ack_method: ${ackMethod}, pending: [${[...this.pending.keys()].join(',')}]`)
         const resolver = this.pending.get(ackMethod)
         if (resolver) {
           this.pending.delete(ackMethod)
@@ -290,6 +372,11 @@ export class SK18Serial {
         } else {
           log(`SK18 no resolver for ${ackMethod}`)
         }
+      } else if (method) {
+        log(`SK18 device method: ${method}`)
+        this.onMessage?.(json)
+      } else {
+        log(`SK18 unrouted frame: ${text.slice(0, 100)}`)
       }
     } catch (e: any) {
       log(`SK18 frame parse error: ${e.message}`)

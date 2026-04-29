@@ -83,12 +83,24 @@
   background: rgba(0,229,255,0.12) !important;
   box-shadow: 0 0 0 2px var(--accent2);
 }
+.key-icon {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  pointer-events: none;
+  flex-shrink: 0;
+}
 .key-label {
   font-size: 11px;
-  color: rgba(255,255,255,0.8);
+  color: rgba(255,255,255,0.85);
   text-align: center;
-  padding: 4px;
+  padding: 2px 4px;
   pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .key-pos {
   font-size: 9px;

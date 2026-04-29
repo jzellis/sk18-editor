@@ -5,11 +5,18 @@ import renderer from 'vite-plugin-electron-renderer'
 import { resolve } from 'path'
 
 export default defineConfig({
+  server: {
+    port: 5200,
+    strictPort: true
+  },
   plugins: [
     react(),
     electron([
       {
         entry: 'src/main/main.ts',
+        onstart(options) {
+          options.startup(['--no-sandbox', '--disable-gpu', '.'])
+        },
         vite: {
           build: {
             outDir: 'dist-electron',

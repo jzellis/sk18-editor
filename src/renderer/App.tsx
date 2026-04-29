@@ -12,7 +12,7 @@ export default function App() {
   const {
     state, newTheme, loadTheme, saveTheme, saveThemeAs,
     addPage, deletePage, renamePage, setCurrentPage,
-    updatePage, upsertItem, deleteItem
+    updatePage, upsertItem, deleteItem, addAsset
   } = useTheme()
 
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
@@ -85,9 +85,11 @@ export default function App() {
             <Canvas
               page={currentPage}
               selectedItemId={selectedItemId}
+              assets={state.assets}
               onSelectItem={handleSelectItem}
               onAddItem={handleAddItem}
               onUpdateItem={handleUpdateItem}
+              onAddAsset={addAsset}
             />
           )}
         </div>
@@ -96,12 +98,14 @@ export default function App() {
             item={selectedItem}
             page={currentPage}
             allPages={state.theme.pages}
+            assets={state.assets}
             onUpdate={handleUpdateItem}
             onDelete={handleDeleteItem}
+            onAddAsset={addAsset}
           />
           <DevicePanel
             theme={state.theme}
-            imageBlobB64={state.imageBlobB64}
+            assets={state.assets}
             currentFilePath={state.filePath}
           />
         </div>

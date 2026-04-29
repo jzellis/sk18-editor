@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, nativeImage } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
-import { parseTheme, buildTheme } from '../shared/theme-io'
+import { parseTheme, buildTheme, parseBlob, buildBlob } from '../shared/theme-io'
 import type { ThemeFile } from '../shared/types'
 import { SK18Serial, findSK18Port } from './serial'
 
@@ -24,7 +24,7 @@ function createWindow() {
   })
 
   if (isDev) {
-    win.loadURL('http://localhost:5173')
+    win.loadURL('http://localhost:5200')
     // F12 opens DevTools detached so it doesn't shrink the app window
     globalShortcut.register('F12', () => {
       win.webContents.openDevTools({ mode: 'detach' })
@@ -56,23 +56,99 @@ ipcMain.handle('theme:open', async () => {
   const filePath = result.filePaths[0]
   const buf = readFileSync(filePath)
   const { theme, imageBlob } = parseTheme(buf)
-  return {
-    filePath,
-    theme,
-    imageBlobB64: imageBlob.length > 0 ? imageBlob.toString('base64') : ''
+  // Parse blob into assets map: devicePath → base64 data
+  const blobAssets = imageBlob.length > 0 ? parseBlob(imageBlob) : {}
+  const assets: Record<string, string> = {}
+  for (const [path, data] of Object.entries(blobAssets)) {
+    assets[path] = data.toString('base64')
   }
+  return { filePath, theme, assets }
 })
 
+// 2x2 opaque black PNG used to explicitly clear button positions on push.
+// Device skips items with path:"" but WILL composite an actual image, clearing old icons.
+const BLANK_ICON_PATH = '/image/SK18/cache/_blank.png'
+const BLANK_ICON_B64: string = (() => {
+  const pixels = Buffer.alloc(2 * 2 * 4, 0)
+  for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255  // alpha=255, opaque black
+  return nativeImage.createFromBitmap(pixels, { width: 2, height: 2 }).toPNG().toString('base64')
+})()
+
+function assetsToBlob(assets: Record<string, string>): Buffer {
+  if (Object.keys(assets).length === 0) return Buffer.alloc(0)
+  const bufAssets: Record<string, Buffer> = {}
+  for (const [path, b64] of Object.entries(assets)) {
+    bufAssets[path] = Buffer.from(b64, 'base64')
+  }
+  return buildBlob(bufAssets)
+}
+
+// Filter assets to only paths referenced by items in the theme (drop orphaned images).
+function referencedAssets(theme: ThemeFile, assets: Record<string, string>): Record<string, string> {
+  const paths = new Set<string>()
+  for (const page of theme.pages) {
+    for (const item of page.items) {
+      if (item.path && typeof item.path === 'string') paths.add(item.path as string)
+      if (item.paths && typeof item.paths === 'string') {
+        for (const p of (item.paths as string).split(';')) { if (p) paths.add(p) }
+      }
+    }
+  }
+  const out: Record<string, string> = {}
+  for (const [p, d] of Object.entries(assets)) { if (paths.has(p)) out[p] = d }
+  return out
+}
+
+// Pad every page with empty stub items for unused grid positions so the device
+// explicitly clears old icons at those positions (device doesn't clear on its own).
+function fillEmptySlots(theme: ThemeFile): ThemeFile {
+  const GRID_COLS = 6, GRID_ROWS = 3
+  const X0 = 10, Y0 = 63, STEP = 218, W = 158, H = 158
+  const CANVAS_W = 1280, CANVAS_H = 720
+  const titleParam = JSON.stringify({
+    FontFamily: 'Microsoft YaHei', FontSize: 24, FontStyle: '',
+    FontUnderline: false, ShowImage: true, ShowTitle: false,
+    TitleAlignment: 'bottom', TitleColor: '#ffffff'
+  })
+  return {
+    ...theme,
+    pages: theme.pages.map(page => {
+      const occupied = new Set<string>()
+      for (const item of page.items) {
+        if (item.type === 115 && item.col != null && item.row != null)
+          occupied.add(`${item.col},${item.row}`)
+      }
+      const stubs: any[] = []
+      for (let pr = 0; pr < GRID_ROWS; pr++) {
+        for (let pc = 0; pc < GRID_COLS; pc++) {
+          const col = GRID_ROWS - 1 - pr, row = pc
+          if (occupied.has(`${col},${row}`)) continue
+          stubs.push({
+            id: `stub-${pr}-${pc}`, type: 115,
+            x: X0 + pc * STEP, y: Y0 + pr * STEP, w: W, h: H, z: 15,
+            col, row, itemName: `control${pr * GRID_COLS + pc + 1}`,
+            lock: '1', path: BLANK_ICON_PATH, paths: '', controlData: '', titleParam,
+            maxWidth: CANVAS_W, maxHeight: CANVAS_H,
+            scaledWidthTo: W, scaledHeightTo: H,
+            opacity: 100, rotate: 0, scale: 1, soundFile: '', title: '',
+          })
+        }
+      }
+      return { ...page, items: [...page.items, ...stubs] }
+    })
+  }
+}
+
 // IPC: save .Theme file
-ipcMain.handle('theme:save', async (_event, filePath: string, theme: ThemeFile, imageBlobB64: string) => {
-  const imageBlob = imageBlobB64 ? Buffer.from(imageBlobB64, 'base64') : Buffer.alloc(0)
-  const buf = buildTheme(theme, imageBlob)
+ipcMain.handle('theme:save', async (_event, filePath: string, theme: ThemeFile, assets: Record<string, string>) => {
+  const imageBlob = assetsToBlob(assets)
+  const buf = buildTheme(theme, imageBlob.length > 0 ? imageBlob : undefined)
   writeFileSync(filePath, buf)
   return { ok: true }
 })
 
 // IPC: save .Theme file as (pick path)
-ipcMain.handle('theme:saveAs', async (_event, theme: ThemeFile, imageBlobB64: string) => {
+ipcMain.handle('theme:saveAs', async (_event, theme: ThemeFile, assets: Record<string, string>) => {
   const result = await dialog.showSaveDialog({
     title: 'Save SK18 Theme',
     filters: [{ name: 'SK18 Theme', extensions: ['Theme'] }],
@@ -80,10 +156,77 @@ ipcMain.handle('theme:saveAs', async (_event, theme: ThemeFile, imageBlobB64: st
   })
   if (result.canceled || !result.filePath) return null
 
-  const imageBlob = imageBlobB64 ? Buffer.from(imageBlobB64, 'base64') : Buffer.alloc(0)
-  const buf = buildTheme(theme, imageBlob)
+  const imageBlob = assetsToBlob(assets)
+  const buf = buildTheme(theme, imageBlob.length > 0 ? imageBlob : undefined)
   writeFileSync(result.filePath, buf)
   return { filePath: result.filePath }
+})
+
+function safeName(localPath: string, forceExt?: string): string {
+  const basename = localPath.split('/').pop() || 'file'
+  const noExt = basename.replace(/\.[^.]+$/, '')
+  const ext = forceExt || basename.split('.').pop()?.toLowerCase() || 'png'
+  return noExt.replace(/[^a-zA-Z0-9_\-]/g, '_') + '.' + ext
+}
+
+// IPC: pick image for a button icon — resize to 158x158, remove white bg, return PNG
+ipcMain.handle('file:pickIcon', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select Button Icon',
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+    properties: ['openFile']
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const localPath = result.filePaths[0]
+
+  const ni = nativeImage.createFromPath(localPath)
+  if (ni.isEmpty()) return null
+
+  // Resize to 158x158 (device renders button icons at native size)
+  const resized = ni.resize({ width: 158, height: 158 })
+  let bitmap = resized.toBitmap()  // raw BGRA, 158*158*4 bytes
+
+  // If fully opaque (no alpha), remove near-white background
+  let allOpaque = true
+  for (let i = 3; i < bitmap.length; i += 4) {
+    if (bitmap[i] < 255) { allOpaque = false; break }
+  }
+  if (allOpaque) {
+    const buf = Buffer.from(bitmap)
+    for (let i = 0; i < buf.length; i += 4) {
+      if (buf[i+2] > 220 && buf[i+1] > 220 && buf[i] > 220) buf[i+3] = 0  // BGRA
+    }
+    bitmap = buf
+  }
+
+  const processed = nativeImage.createFromBitmap(Buffer.from(bitmap), { width: 158, height: 158 })
+  const pngData = processed.toPNG()
+  const devicePath = `/image/SK18/cache/${safeName(localPath, 'png')}`
+  const dataB64 = pngData.toString('base64')
+  return { devicePath, dataB64, previewUrl: `data:image/png;base64,${dataB64}` }
+})
+
+// IPC: pick background image or video for a page
+ipcMain.handle('file:pickBackground', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select Background Image or Video',
+    filters: [
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+      { name: 'Video (pre-transcoded 1280x720 H.264)', extensions: ['mp4', 'webm'] },
+    ],
+    properties: ['openFile']
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const localPath = result.filePaths[0]
+  const ext = localPath.split('.').pop()?.toLowerCase() || 'png'
+  const isVideo = ext === 'mp4' || ext === 'webm'
+  const data = readFileSync(localPath)
+  const dataB64 = data.toString('base64')
+  const devicePath = isVideo
+    ? `/image/1280x720/cache/${safeName(localPath)}`
+    : `/image/SK18/cache/${safeName(localPath)}`
+  const mime = isVideo ? `video/${ext}` : ext === 'gif' ? 'image/gif' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png'
+  return { devicePath, dataB64, isVideo, mimeType: mime, previewUrl: `data:${mime};base64,${dataB64}` }
 })
 
 // IPC: pick image/video file for a widget
@@ -145,6 +288,11 @@ ipcMain.handle('file:showInFolder', async (_event, filePath: string) => {
 
 // --- Device serial IPC ---
 const device = new SK18Serial()
+
+device.setOnMessage(msg => {
+  const win = BrowserWindow.getAllWindows()[0]
+  win?.webContents.send('device:message', msg)
+})
 
 // USB hotplug: watch udev for tty add events, connect immediately when SK18 appears.
 // Timing is critical — device serial listener only opens briefly after boot.
@@ -224,10 +372,30 @@ ipcMain.handle('device:listThemes', async () => {
   }
 })
 
-ipcMain.handle('device:pushTheme', async (event, theme: ThemeFile, imageBlobB64: string, devicePath: string) => {
+ipcMain.handle('device:reloadTheme', async (_event, devicePath: string) => {
   try {
-    const imageBlob = imageBlobB64 ? Buffer.from(imageBlobB64, 'base64') : Buffer.alloc(0)
-    const buf = buildTheme(theme, imageBlob)
+    await device.reloadTheme(devicePath)
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('device:sendSystemData', async (_event, data: Record<string, string>) => {
+  try {
+    await device.sendSystemData(data)
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('device:pushTheme', async (event, theme: ThemeFile, assets: Record<string, string>, devicePath: string) => {
+  try {
+    const pushTheme = fillEmptySlots(theme)
+    const allAssets = { [BLANK_ICON_PATH]: BLANK_ICON_B64, ...assets }
+    const imageBlob = assetsToBlob(referencedAssets(pushTheme, allAssets))
+    const buf = buildTheme(pushTheme, imageBlob.length > 0 ? imageBlob : undefined)
 
     await device.pushTheme(buf, devicePath, (pct, msg) => {
       event.sender.send('device:progress', { pct, msg })

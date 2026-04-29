@@ -59,6 +59,10 @@ export interface Item {
   // Button key (type 115)
   col?: number
   row?: number
+  itemName?: string       // e.g. "control0" — required for device to register button
+  lock?: string           // must be '1' for device to handle button presses
+  title?: string
+  titleParam?: string     // JSON string with font/display settings
   controlData?: string    // base64 QDataStream QVariantMap
   controlDataList?: string // base64 QList<QVariantMap> for ControlFlow
 

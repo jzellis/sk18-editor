@@ -9,18 +9,22 @@ interface ThemeEntry {
 
 interface Props {
   theme: ThemeFile | null
-  imageBlobB64: string
+  assets: Record<string, string>
   currentFilePath: string | null
 }
 
 type ConnectState = 'disconnected' | 'connecting' | 'connected' | 'error'
 
-export default function DevicePanel({ theme, imageBlobB64, currentFilePath }: Props) {
+export default function DevicePanel({ theme, assets, currentFilePath }: Props) {
   const [connectState, setConnectState] = useState<ConnectState>('disconnected')
   const [detectedPort, setDetectedPort] = useState<string | null>(null)
   const [deviceInfo, setDeviceInfo] = useState<Record<string, unknown> | null>(null)
   const [deviceThemes, setDeviceThemes] = useState<ThemeEntry[]>([])
-  const [pushPath, setPushPath] = useState('/data/theme/SK18/My Theme.Theme')
+  const [pushPath, setPushPath] = useState(() => {
+    const d = new Date()
+    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`
+    return `/data/theme/SK18/${stamp}.Theme`
+  })
   const [progress, setProgress] = useState<{ pct: number; msg: string } | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -100,12 +104,10 @@ export default function DevicePanel({ theme, imageBlobB64, currentFilePath }: Pr
     if (!theme) return
     setProgress({ pct: 0, msg: 'Starting...' })
     setLastError(null)
-    const result = await (window as any).sk18.devicePushTheme(theme, imageBlobB64, pushPath)
-    if (!result.ok) {
-      setLastError(result.error)
-      setProgress(null)
-    }
-  }, [theme, imageBlobB64, pushPath])
+    const result = await (window as any).sk18.devicePushTheme(theme, assets, pushPath)
+    if (!result.ok) setLastError(result.error)
+    setProgress(null)
+  }, [theme, assets, pushPath])
 
   const isConnected = connectState === 'connected'
 
